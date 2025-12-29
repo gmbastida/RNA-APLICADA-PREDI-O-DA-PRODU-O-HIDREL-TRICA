@@ -1,0 +1,755 @@
+# ============================================================
+# CORRELAÇÃO – NOMES PADRONIZADOS + DATAFRAME (GERAÇÃO x DEMAIS)
+# ============================================================
+
+if (!require(corrplot)) install.packages("corrplot"); library(corrplot)
+if (!require(ggplot2))  install.packages("ggplot2");  library(ggplot2)
+
+# ------------------------------------------------------------
+# 1) DICIONÁRIO DE NOMES (ORIGINAL -> NOME PARA RELATÓRIO)
+#    Ajuste aqui se quiser mudar algum termo/unidade.
+# ------------------------------------------------------------
+
+nomes_relatorio <- c(
+  geracao           = "Geração (MWmed)",
+  cota              = "Cota (m)",
+  afluencia         = "Afluência (m³/s)",
+  defluencia        = "Defluência (m³/s)",
+  vazao_vertida     = "Vazão vertida (m³/s)",
+  vazao_turbinada   = "Vazão turbinada (m³/s)",
+  vazao_natural     = "Vazão natural (m³/s)",
+  vazao_incremental = "Vazão incremental (m³/s)",
+  temp_ins          = "Temperatura instantânea (°C)",
+  temp_max          = "Temperatura máxima (°C)",
+  temp_min          = "Temperatura mínima (°C)",
+  umi_ins           = "Umidade instantânea (%)",
+  umi_max           = "Umidade máxima (%)",
+  umi_min           = "Umidade mínima (%)",
+  pto_orvalho_ins   = "Ponto de orvalho instantâneo (°C)",
+  pto_orvalho_max   = "Ponto de orvalho máximo (°C)",
+  pto_orvalho_min   = "Ponto de orvalho mínimo (°C)",
+  pressao_ins       = "Pressão instantânea (hPa)",
+  pressao_max       = "Pressão máxima (hPa)",
+  pressao_min       = "Pressão mínima (hPa)",
+  vel_vento         = "Velocidade do vento (m/s)",
+  rajada_vento      = "Rajada de vento (m/s)",
+  chuva             = "Chuva (mm)"
+)
+
+# Função auxiliar: aplica nomes do relatório apenas nas colunas que existirem
+aplicar_nomes_relatorio <- function(df, dict) {
+  comuns <- intersect(names(df), names(dict))
+  names(df)[match(comuns, names(df))] <- dict[comuns]
+  df
+}
+
+# ------------------------------------------------------------
+# 2) BASE PARA CORRELAÇÃO 
+#    Remove colunas constantes (sd = 0)
+# ------------------------------------------------------------
+
+dados_corr <- dados1
+dados_corr <- dados_corr[, sapply(dados_corr, function(x) sd(x, na.rm = TRUE) != 0)]
+
+# Matriz de correlação (lida com NA)
+mat_cor <- cor(dados_corr, use = "pairwise.complete.obs")
+
+# ------------------------------------------------------------
+# 3) DATAFRAME NUMÉRICO: CORRELAÇÃO (GERAÇÃO x DEMAIS)
+# ------------------------------------------------------------
+
+cor_geracao <- mat_cor[, "geracao"]
+cor_geracao <- cor_geracao[names(cor_geracao) != "geracao"]  # remove autocorrelação
+
+df_cor_geracao <- data.frame(
+  Variavel_original  = names(cor_geracao),
+  Variavel_relatorio = nomes_relatorio[names(cor_geracao)],
+  Correlacao         = as.numeric(cor_geracao),
+  Correlacao_abs     = abs(as.numeric(cor_geracao))
+)
+
+# Se alguma variável não tiver mapeamento (NA), usar o nome original como fallback
+df_cor_geracao$Variavel_relatorio[is.na(df_cor_geracao$Variavel_relatorio)] <- df_cor_geracao$Variavel_original
+
+# Ordenar (mais forte em |cor| primeiro)
+df_cor_geracao <- df_cor_geracao[order(df_cor_geracao$Correlacao_abs, decreasing = TRUE), ]
+
+# Exibir dataframe (numérico)
+print(df_cor_geracao)
+
+# ------------------------------------------------------------
+# 4) HEATMAP DA MATRIZ DE CORRELAÇÃO COM NOMES "DE RELATÓRIO"
+# ------------------------------------------------------------
+
+# Criar uma cópia da matriz com nomes bonitos (linhas e colunas)
+mat_cor_rel <- mat_cor
+colnames(mat_cor_rel) <- ifelse(colnames(mat_cor_rel) %in% names(nomes_relatorio),
+                                nomes_relatorio[colnames(mat_cor_rel)],
+                                colnames(mat_cor_rel))
+rownames(mat_cor_rel) <- ifelse(rownames(mat_cor_rel) %in% names(nomes_relatorio),
+                                nomes_relatorio[rownames(mat_cor_rel)],
+                                rownames(mat_cor_rel))
+
+corrplot(
+  mat_cor_rel,
+  method      = "color",
+  type        = "upper",
+  order       = "hclust",
+  addCoef.col = "black",
+  tl.col      = "black",
+  tl.srt      = 45,
+  number.cex  = 0.6,
+  mar         = c(0, 0, 2, 0),
+  title       = "Matriz de correlação entre variáveis (dados normalizados)"
+)
+
+# ------------------------------------------------------------
+# 5) GRÁFICO DE BARRAS (GERAÇÃO x DEMAIS) COM NOMES BONITOS
+# ------------------------------------------------------------
+
+# Criar fator para ordenar no gráfico
+df_plot <- df_cor_geracao
+df_plot$Variavel_relatorio <- factor(df_plot$Variavel_relatorio,
+                                     levels = rev(df_plot$Variavel_relatorio))
+
+g_cor <- ggplot(df_plot, aes(x = Variavel_relatorio, y = Correlacao)) +
+  geom_col(width = 0.65) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  coord_flip() +
+  labs(
+    x = "Variáveis de entrada",
+    y = "Coeficiente de correlação",
+    
+    
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title   = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle= element_text(hjust = 0.5),
+    axis.text.y  = element_text(size = 10),
+    axis.text.x  = element_text(size = 10)
+  )
+
+print(g_cor)
+
+
+
+# ============================================================
+# VALIDAÇÃO TEMPORAL (2025) – 2 REDES TOP1 (TOP5 em .rds)
+# Normalização: min-max calculada no próprio conjunto de 2025 
+# ============================================================
+
+rm(list = ls())
+graphics.off()
+cat("\014")
+
+# ------------------------------------------------------------
+# 1) AJUSTES 
+# ------------------------------------------------------------
+
+setwd("C:/Users/Gabriel/OneDrive/Desktop/path rstudio")  
+
+# Dados de 2025 (planilha já no mesmo formato das anteriores)
+arquivo_dados_2025 <- "rosaprima25.xlsx"               
+
+# Arquivos .rds com TOP 5 redes (cada arquivo contém uma LISTA com 5 modelos)
+arquivo_top5_inicial  <- "top5redes_todos parame.rds"         
+arquivo_top5_filtrado <- "top5_redes_modelos_2324filtrado.rds"        
+
+# Top1 dentro do arquivo (por padrão, 1)
+idx_top1_inicial  <- 1
+idx_top1_filtrado <- 1
+
+# Variáveis do conjunto inicial (todas)
+vars_iniciais <- c(
+  "geracao", "cota", "afluencia", "defluencia",
+  "vazao_vertida", "vazao_turbinada",
+  "vazao_natural", "vazao_incremental",
+  "temp_ins", "temp_max", "temp_min",
+  "umi_ins", "umi_max", "umi_min",
+  "pto_orvalho_ins", "pto_orvalho_max", "pto_orvalho_min",
+  "pressao_ins", "pressao_max", "pressao_min",
+  "vel_vento", "rajada_vento",
+  "chuva"
+)
+
+# Variáveis do conjunto filtrado 
+# Sempre comece com "geracao"
+vars_filtradas <- c(
+  "geracao",
+ 
+  "cota", "afluencia", "defluencia",
+  "vazao_vertida", "vazao_turbinada",
+  "vazao_natural", "vazao_incremental"
+)
+
+# ------------------------------------------------------------
+# 2) PACOTES
+# ------------------------------------------------------------
+
+if(!require(openxlsx)) install.packages("openxlsx"); library(openxlsx)
+if(!require(RSNNS))    install.packages("RSNNS");    library(RSNNS)
+if(!require(ggplot2))  install.packages("ggplot2");  library(ggplot2)
+
+# ------------------------------------------------------------
+# 3) CARREGAR DADOS 2025 E PRÉ-PROCESSAR
+# ------------------------------------------------------------
+
+dados_2025  <- read.xlsx(arquivo_dados_2025, sheet = 1)
+dados1_2025 <- as.data.frame(dados_2025[, -1])  # remove 1ª coluna (dia)
+
+colnames(dados1_2025) <- c(
+  "geracao", "cota", "afluencia", "defluencia",
+  "vazao_vertida", "vazao_turbinada",
+  "vazao_natural", "vazao_incremental",
+  "temp_ins", "temp_max", "temp_min",
+  "umi_ins", "umi_max", "umi_min",
+  "pto_orvalho_ins", "pto_orvalho_max", "pto_orvalho_min",
+  "pressao_ins", "pressao_max", "pressao_min",
+  "vel_vento", "rajada_vento",
+  "chuva"
+)
+
+dados1_2025 <- na.omit(dados1_2025)
+
+# Normalização min-max usando o próprio 2025 (como você pediu)
+normalize <- function(x) { (x - min(x)) / (max(x) - min(x)) }
+dados2_2025 <- as.data.frame(lapply(dados1_2025, normalize))
+
+# Para desnormalizar a geração (2025)
+geracao_min_2025 <- min(dados1_2025$geracao)
+geracao_max_2025 <- max(dados1_2025$geracao)
+
+# ------------------------------------------------------------
+# 4) CARREGAR TOP5 E PEGAR TOP1
+# ------------------------------------------------------------
+
+lista_inicial  <- readRDS(arquivo_top5_inicial)
+lista_filtrado <- readRDS(arquivo_top5_filtrado)
+
+rede_inicial_top1  <- lista_inicial[[idx_top1_inicial]]
+rede_filtrado_top1 <- lista_filtrado[[idx_top1_filtrado]]
+
+# ------------------------------------------------------------
+# 5) PREPARAR INPUTS 2025 PARA CADA REDE
+# ------------------------------------------------------------
+
+# Conjunto inicial
+dados_inicial_2025 <- dados2_2025[, vars_iniciais]
+X_inicial_2025 <- as.matrix(dados_inicial_2025[, colnames(dados_inicial_2025) != "geracao"])
+y_real_norm_2025 <- dados2_2025$geracao
+
+# Conjunto filtrado
+dados_filtrado_2025 <- dados2_2025[, vars_filtradas]
+X_filtrado_2025 <- as.matrix(dados_filtrado_2025[, colnames(dados_filtrado_2025) != "geracao"])
+
+# ------------------------------------------------------------
+# 6) PREVER 2025 E DESNORMALIZAR
+# ------------------------------------------------------------
+
+y_pred_norm_inicial_2025  <- as.vector(predict(rede_inicial_top1,  X_inicial_2025))
+y_pred_norm_filtrado_2025 <- as.vector(predict(rede_filtrado_top1, X_filtrado_2025))
+
+# Desnormalizar (escala real 2025)
+y_real_2025 <- y_real_norm_2025 * (geracao_max_2025 - geracao_min_2025) + geracao_min_2025
+
+y_pred_inicial_2025  <- y_pred_norm_inicial_2025  * (geracao_max_2025 - geracao_min_2025) + geracao_min_2025
+y_pred_filtrado_2025 <- y_pred_norm_filtrado_2025 * (geracao_max_2025 - geracao_min_2025) + geracao_min_2025
+
+# ------------------------------------------------------------
+# 7) MÉTRICAS DE DESEMPENHO (2025)
+# ------------------------------------------------------------
+
+calc_metricas <- function(y_real, y_pred) {
+  erro <- y_pred - y_real
+  erro_abs <- abs(erro)
+  erro_rel <- abs(erro / y_real)
+  erro_rel[!is.finite(erro_rel)] <- NA
+
+  SSE  <- sum((y_pred - y_real)^2, na.rm = TRUE)
+  MSE  <- mean((y_pred - y_real)^2, na.rm = TRUE)
+  RMSE <- sqrt(MSE)
+
+  ARE  <- mean(erro_rel, na.rm = TRUE)
+  ARED <- ARE * 100
+
+  MAE  <- mean(erro_abs, na.rm = TRUE)
+  Bias <- mean(erro, na.rm = TRUE)
+  SD   <- sd(erro, na.rm = TRUE)
+
+  R2 <- 1 - sum((y_real - y_pred)^2, na.rm = TRUE) /
+            sum((y_real - mean(y_real, na.rm = TRUE))^2, na.rm = TRUE)
+
+  Perc_5  <- mean(erro_rel <= 0.05, na.rm = TRUE) * 100
+  Perc_10 <- mean(erro_rel <= 0.10, na.rm = TRUE) * 100
+
+  MediaPorcAcerto <- mean(100 - abs((y_real - y_pred) / y_pred) * 100, na.rm = TRUE)
+
+  data.frame(
+    SSE = SSE, MSE = MSE, RMSE = RMSE,
+    ARE = ARE, ARED = ARED,
+    MAE = MAE, Bias = Bias, DesvioPadrao_Erros = SD,
+    R2 = R2,
+    Perc_erro_rel_5  = Perc_5,
+    Perc_erro_rel_10 = Perc_10,
+    MediaPorcAcerto = MediaPorcAcerto
+  )
+}
+
+met_inicial_2025  <- calc_metricas(y_real_2025, y_pred_inicial_2025)
+met_filtrado_2025 <- calc_metricas(y_real_2025, y_pred_filtrado_2025)
+
+tabela_2025 <- rbind(
+  data.frame(Modelo = "Conjunto inicial (Top1)",  met_inicial_2025),
+  data.frame(Modelo = "Conjunto filtrado (Top1)", met_filtrado_2025)
+)
+
+# Arredondar apenas colunas numéricas
+tabela_2025_round <- tabela_2025
+cols_num <- sapply(tabela_2025_round, is.numeric)
+tabela_2025_round[cols_num] <- lapply(tabela_2025_round[cols_num], round, 4)
+
+cat("\n===== MÉTRICAS (VALIDAÇÃO 2025) =====\n")
+print(tabela_2025_round)
+
+# Exportar tabela para Excel
+write.xlsx(tabela_2025_round, file = "metricas_validacao_2025.xlsx", overwrite = TRUE)
+
+# ------------------------------------------------------------
+# 8) DATAFRAMES PARA GRÁFICOS (2025)
+# ------------------------------------------------------------
+
+n <- length(y_real_2025)
+
+df_disp_2025 <- data.frame(
+  Real = rep(y_real_2025, 2),
+  Previsto = c(y_pred_inicial_2025, y_pred_filtrado_2025),
+  Modelo = factor(rep(c("Conjunto inicial", "Conjunto filtrado"), each = n))
+)
+
+df_tempo_2025 <- data.frame(
+  Observacao = 1:n,
+  Real = y_real_2025,
+  Previsto_Inicial = y_pred_inicial_2025,
+  Previsto_Filtrado = y_pred_filtrado_2025
+)
+
+erro_inicial_2025  <- y_pred_inicial_2025  - y_real_2025
+erro_filtrado_2025 <- y_pred_filtrado_2025 - y_real_2025
+
+df_erros_2025 <- data.frame(
+  Erro = c(erro_inicial_2025, erro_filtrado_2025),
+  ErroAbs = c(abs(erro_inicial_2025), abs(erro_filtrado_2025)),
+  Modelo = factor(rep(c("Conjunto inicial", "Conjunto filtrado"), each = n))
+)
+
+# ============================================================
+# 9) GRÁFICOS (2025) – MESMO PADRÃO DOS ANTERIORES
+# ============================================================
+
+# 9.1 Dispersão: Real x Previsto (linha ideal)
+g1 <- ggplot(df_disp_2025, aes(x = Real, y = Previsto, color = Modelo)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  coord_equal() +
+  labs(
+    x = "Geração real (MWmed)",
+    y = "Geração prevista (MWmed)",
+    color = "Modelo",
+    title = "Real × Previsto (2025)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+print(g1)
+ggsave("2025_real_vs_previsto.png", g1, width = 8, height = 5, dpi = 300)
+
+
+# 9.2 Série temporal: Real e Previsto
+g2 <- ggplot(df_tempo_2025, aes(x = Observacao)) +
+  geom_line(aes(y = Real, color = "Real"), linewidth = 0.8) +
+  geom_line(aes(y = Previsto_Inicial, color = "Conjunto inicial"), linetype = "dotted") +
+  geom_line(aes(y = Previsto_Filtrado, color = "Conjunto filtrado"), linetype = "dashed") +
+  labs(
+    x = "Observação (índice do conjunto 2025)",
+    y = "Geração (MWmed)",
+    color = "Série",
+    title = "Série temporal (2025)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+print(g2)
+ggsave("2025_serie_temporal.png", g2, width = 10, height = 5, dpi = 300)
+
+
+# 9.3 Boxplot: Erros (Previsto - Real)
+g3 <- ggplot(df_erros_2025, aes(x = Modelo, y = Erro)) +
+  geom_boxplot(outlier.alpha = 0.4) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Modelo",
+    y = "Erro (Previsto - Real) [MWmed]",
+    title = "Dispersão dos erros (2025)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+print(g3)
+ggsave("2025_boxplot_erros.png", g3, width = 8, height = 5, dpi = 300)
+
+
+# 9.4 Boxplot: Erro absoluto |Previsto - Real|
+g4 <- ggplot(df_erros_2025, aes(x = Modelo, y = ErroAbs)) +
+  geom_boxplot(outlier.alpha = 0.4) +
+  labs(
+    x = "Modelo",
+    y = "Erro absoluto |Previsto - Real| [MWmed]",
+    title = "Dispersão do erro absoluto (2025)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+print(g4)
+ggsave("2025_boxplot_erro_absoluto.png", g4, width = 8, height = 5, dpi = 300)
+
+
+# 9.5 Distribuição dos erros (densidade)
+g5 <- ggplot(df_erros_2025, aes(x = Erro, fill = Modelo)) +
+  geom_density(alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Erro (Previsto - Real) [MWmed]",
+    y = "Densidade",
+    title = "Distribuição dos erros (2025)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+print(g5)
+ggsave("2025_densidade_erros.png", g5, width = 8, height = 5, dpi = 300)
+
+
+# ============================================================
+# LIMPAR AMBIENTE, GRÁFICOS E CONSOLE
+# ============================================================
+
+rm(list = ls())
+graphics.off()
+cat("\014")
+
+
+# ============================================================
+# 1. AJUSTES DO USUÁRIO
+# ============================================================
+
+# Caminho da pasta de trabalho
+setwd("C:/Users/Gabriel/OneDrive/Desktop/path rstudio") 
+
+# Arquivo de dados usado originalmente (mesmo usado nos treinos)
+arquivo_dados <- "rosaprima2324.xlsx"                    
+
+# Arquivos das redes já treinadas (top 1 de cada conjunto)
+arquivo_modelos_inicial  <- "top5redes_todos parame.rds"   
+arquivo_modelos_filtrado <- "top5_redes_modelos_2324filtrado.rds"  
+
+# Vetores com as variáveis usadas por cada rede
+# IMPORTANTE:
+#  - SEMPRE incluir "geracao" na primeira posição
+#  - As demais são as variáveis de ENTRADA usadas no treino daquela rede
+
+# Rede do conjunto inicial (exemplo: todas as variáveis)
+vars_iniciais <- c(
+  "geracao", "cota", "afluencia", "defluencia",
+  "vazao_vertida", "vazao_turbinada",
+  "vazao_natural", "vazao_incremental",
+  "temp_ins", "temp_max", "temp_min",
+  "umi_ins", "umi_max", "umi_min",
+  "pto_orvalho_ins", "pto_orvalho_max", "pto_orvalho_min",
+  "pressao_ins", "pressao_max", "pressao_min",
+  "vel_vento", "rajada_vento",
+  "chuva"
+)
+
+# Rede do conjunto filtrado (
+
+vars_filtradas <- c(
+  "geracao", "cota", "afluencia", "defluencia",
+  "vazao_vertida", "vazao_turbinada",
+  "vazao_natural", "vazao_incremental"
+)
+
+
+# ============================================================
+# 2. CARREGAMENTO DE PACOTES
+# ============================================================
+
+if(!require(openxlsx)) install.packages("openxlsx"); library(openxlsx)
+if(!require(RSNNS))    install.packages("RSNNS");    library(RSNNS)
+if(!require(ggplot2))  install.packages("ggplot2");  library(ggplot2)
+
+
+# ============================================================
+# 3. LEITURA DOS DADOS E PRÉ-PROCESSAMENTO
+#    (MESMA LÓGICA UTILIZADA NOS TREINOS ANTERIORES)
+# ============================================================
+
+dados  <- read.xlsx(arquivo_dados, sheet = 1)
+dados1 <- as.data.frame(dados[, -1])  # remove coluna do dia, se for a primeira
+
+colnames(dados1) <- c(
+  "geracao", "cota", "afluencia", "defluencia",
+  "vazao_vertida", "vazao_turbinada",
+  "vazao_natural", "vazao_incremental",
+  "temp_ins", "temp_max", "temp_min",
+  "umi_ins", "umi_max", "umi_min",
+  "pto_orvalho_ins", "pto_orvalho_max", "pto_orvalho_min",
+  "pressao_ins", "pressao_max", "pressao_min",
+  "vel_vento", "rajada_vento",
+  "chuva"
+)
+
+dados1 <- na.omit(dados1)
+
+# Normalização [0,1] (igual você já vinha usando)
+normalize <- function(x) { (x - min(x)) / (max(x) - min(x)) }
+dados2 <- as.data.frame(lapply(dados1, normalize))
+
+# Partição treino/teste (precisa ser a mesma dos treinos anteriores)
+set.seed(1111)
+particao <- createDataPartition(dados2$geracao, p = 0.7, list = FALSE)
+treino   <- dados2[particao, ]
+teste    <- dados2[-particao, ]
+
+# Para desnormalizar
+geracao_min <- min(dados1$geracao)
+geracao_max <- max(dados1$geracao)
+
+
+# ============================================================
+# 4. CARREGAR AS DUAS REDES JÁ TREINADAS
+# ============================================================
+# Cada arquivo .rds contém uma lista com 5 redes (top 5)
+lista_inicial   <- readRDS(arquivo_modelos_inicial)
+lista_filtrados <- readRDS(arquivo_modelos_filtrado)
+
+# Aqui você escolhe qual índice é a top1 em cada lista.
+# Se a melhor estiver na posição 1, deixe assim:
+idx_top1_inicial   <- 1
+idx_top1_filtrado  <- 1  # mude para 2, 3, etc., se for outra posição
+
+modelo_inicial  <- lista_inicial[[idx_top1_inicial]]
+modelo_filtrado <- lista_filtrados[[idx_top1_filtrado]]
+# ============================================================
+# 5. PREPARAR AS ENTRADAS DO CONJUNTO DE TESTE PARA CADA REDE
+# ============================================================
+
+# --- Para a rede do conjunto inicial ---
+teste_inicial <- teste[, vars_iniciais]   # seleciona apenas as colunas usadas
+inputs_teste_inicial <- as.matrix(teste_inicial[, colnames(teste_inicial) != "geracao"])
+
+# --- Para a rede do conjunto filtrado ---
+teste_filtrado <- teste[, vars_filtradas] # seleciona as colunas do conjunto filtrado
+inputs_teste_filtrado <- as.matrix(teste_filtrado[, colnames(teste_filtrado) != "geracao"])
+
+
+# ============================================================
+# 6. PREVISÕES E DESNORMALIZAÇÃO
+# ============================================================
+
+# Saída real (em escala original)
+y_real <- teste$geracao * (geracao_max - geracao_min) + geracao_min
+
+# --- Rede do conjunto inicial ---
+y_pred_norm_inicial <- as.vector(predict(modelo_inicial, inputs_teste_inicial))
+y_pred_inicial <- y_pred_norm_inicial * (geracao_max - geracao_min) + geracao_min
+
+# --- Rede do conjunto filtrado ---
+y_pred_norm_filtrado <- as.vector(predict(modelo_filtrado, inputs_teste_filtrado))
+y_pred_filtrado <- y_pred_norm_filtrado * (geracao_max - geracao_min) + geracao_min
+
+
+# ============================================================
+# 7. DATA FRAMES PARA GRÁFICOS
+# ============================================================
+
+n <- length(y_real)
+
+# Para o gráfico Real x Previsto
+df_disp <- data.frame(
+  Real     = rep(y_real, 2),
+  Previsto = c(y_pred_inicial, y_pred_filtrado),
+  Modelo   = factor(rep(c("Conjunto inicial", "Conjunto filtrado"), each = n))
+)
+
+# Para a série temporal (opcional)
+df_tempo <- data.frame(
+  Observacao        = 1:n,
+  Real              = y_real,
+  Previsto_Inicial  = y_pred_inicial,
+  Previsto_Filtrado = y_pred_filtrado
+)
+
+
+# ============================================================
+# 8. GRÁFICO 1 – DISPERSÃO (REAL x PREVISTO)
+# ============================================================
+
+g1 <- ggplot(df_disp, aes(x = Real, y = Previsto, color = Modelo)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  coord_equal() +
+  labs(
+    x = "Geração real (MWmed)",
+    y = "Geração prevista (MWmed)",
+    color = "Modelo",
+    title = "Comparação entre redes neurais – conjunto inicial vs conjunto filtrado"
+  ) +
+  theme_minimal()
+
+print(g1)
+
+
+# ============================================================
+# 9. GRÁFICO 2 – SÉRIE TEMPORAL (OPCIONAL)
+# ============================================================
+
+g2 <- ggplot(df_tempo, aes(x = Observacao)) +
+  geom_line(aes(y = Real,              color = "Real"), linewidth = 0.8) +
+  geom_line(aes(y = Previsto_Inicial,  color = "Conjunto inicial"),  linetype = "dotted") +
+  geom_line(aes(y = Previsto_Filtrado, color = "Conjunto filtrado"), linetype = "dashed") +
+  labs(
+    x = "Observação (índice do conjunto de teste)",
+    y = "Geração (MWmed)",
+    color = "Série",
+    title = "Série temporal – comparação entre redes neurais"
+  ) +
+  theme_minimal()
+
+print(g2)
+
+# ============================================================
+# 10. CÁLCULO DE MÉTRICAS COMPARATIVAS ADICIONAIS
+# ============================================================
+
+# Erros (resíduos) de cada modelo
+erro_inicial  <- y_pred_inicial  - y_real
+erro_filtrado <- y_pred_filtrado - y_real
+
+# Erros absolutos
+erro_abs_inicial  <- abs(erro_inicial)
+erro_abs_filtrado <- abs(erro_filtrado)
+
+# Erro relativo absoluto (em módulo)
+erro_rel_inicial  <- abs(erro_inicial  / y_real)
+erro_rel_filtrado <- abs(erro_filtrado / y_real)
+
+# Tratar infinidades quando y_real = 0
+erro_rel_inicial[!is.finite(erro_rel_inicial)]     <- NA
+erro_rel_filtrado[!is.finite(erro_rel_filtrado)]   <- NA
+
+# --- Métricas para o modelo do conjunto inicial ---
+MAE_inicial   <- mean(erro_abs_inicial,  na.rm = TRUE)              # erro médio absoluto
+RMSE_inicial  <- sqrt(mean(erro_inicial^2, na.rm = TRUE))           # já tinha, mas recalculamos aqui
+Bias_inicial  <- mean(erro_inicial,      na.rm = TRUE)              # erro médio (tendência)
+SD_inicial    <- sd(erro_inicial,        na.rm = TRUE)              # desvio padrão dos erros
+R2_inicial    <- 1 - sum((y_real - y_pred_inicial)^2, na.rm = TRUE) /
+                      sum((y_real - mean(y_real))^2,  na.rm = TRUE) # coeficiente de determinação
+
+perc_erro5_inicial  <- mean(erro_rel_inicial  <= 0.05, na.rm = TRUE) * 100  # % erro <= 5%
+perc_erro10_inicial <- mean(erro_rel_inicial  <= 0.10, na.rm = TRUE) * 100  # % erro <= 10%
+
+
+# --- Métricas para o modelo do conjunto filtrado ---
+MAE_filtrado   <- mean(erro_abs_filtrado,  na.rm = TRUE)
+RMSE_filtrado  <- sqrt(mean(erro_filtrado^2, na.rm = TRUE))
+Bias_filtrado  <- mean(erro_filtrado,      na.rm = TRUE)
+SD_filtrado    <- sd(erro_filtrado,        na.rm = TRUE)
+R2_filtrado    <- 1 - sum((y_real - y_pred_filtrado)^2, na.rm = TRUE) /
+                       sum((y_real - mean(y_real))^2,   na.rm = TRUE)
+
+perc_erro5_filtrado  <- mean(erro_rel_filtrado  <= 0.05, na.rm = TRUE) * 100
+perc_erro10_filtrado <- mean(erro_rel_filtrado  <= 0.10, na.rm = TRUE) * 100
+
+
+# --- TABELA RESUMO DE COMPARAÇÃO ENTRE OS DOIS MODELOS ---
+tabela_comparacao <- data.frame(
+  Modelo              = c("Conjunto inicial", "Conjunto filtrado"),
+  MAE                 = c(MAE_inicial,        MAE_filtrado),
+  RMSE                = c(RMSE_inicial,       RMSE_filtrado),
+  Bias                = c(Bias_inicial,       Bias_filtrado),
+  DesvioPadrao_Erros  = c(SD_inicial,         SD_filtrado),
+  R2                  = c(R2_inicial,         R2_filtrado),
+  `Perc_erro_rel_<=5`   = c(perc_erro5_inicial, perc_erro5_filtrado),
+  `Perc_erro_rel_<=10`  = c(perc_erro10_inicial,perc_erro10_filtrado)
+)
+
+# Criar uma cópia para arredondar apenas as colunas numéricas
+tabela_comparacao_round <- tabela_comparacao
+
+cols_numericas <- sapply(tabela_comparacao_round, is.numeric)
+
+tabela_comparacao_round[cols_numericas] <- lapply(
+  tabela_comparacao_round[cols_numericas],
+  round,
+  4
+)
+
+cat("\n===== Tabela de comparação entre os dois modelos =====\n")
+print(tabela_comparacao_round)
+
+
+# ============================================================
+# 11. VISUALIZAÇÃO – DISPERSÃO E DISTRIBUIÇÃO DOS ERROS
+# ============================================================
+
+# Data frame dos erros para gráficos
+df_erros <- data.frame(
+  Erro   = c(erro_inicial, erro_filtrado),
+  ErroAbs = c(erro_abs_inicial, erro_abs_filtrado),
+  Modelo = factor(rep(c("Conjunto inicial", "Conjunto filtrado"), each = length(y_real)))
+)
+
+# --- Boxplot dos erros (dispersão) ---
+g3 <- ggplot(df_erros, aes(x = Modelo, y = Erro)) +
+  geom_boxplot(outlier.alpha = 0.4) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Modelo",
+    y = "Erro (Previsto - Real)",
+    title = "Dispersão dos erros das previsões"
+  ) +
+  theme_minimal()
+
+print(g3)
+
+# --- Boxplot dos erros absolutos ---
+g4 <- ggplot(df_erros, aes(x = Modelo, y = ErroAbs)) +
+  geom_boxplot(outlier.alpha = 0.4) +
+  labs(
+    x = "Modelo",
+    y = "Erro absoluto |Previsto - Real|",
+    title = "Dispersão do erro absoluto"
+  ) +
+  theme_minimal()
+
+print(g4)
+
+# --- Distribuição dos erros (densidade) ---
+g5 <- ggplot(df_erros, aes(x = Erro, fill = Modelo)) +
+  geom_density(alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Erro (Previsto - Real)",
+    y = "Densidade",
+    title = "Distribuição dos erros de previsão"
+  ) +
+  theme_minimal()
+
+print(g5)
+
